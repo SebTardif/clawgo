@@ -243,6 +243,9 @@ func parseFlags(cmd string, args []string) NodeConfig {
 }
 
 func runPair(cfg NodeConfig) error {
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer cancel()
+
 	state, err := loadOrInitState(cfg)
 	if err != nil {
 		return err
@@ -265,8 +268,11 @@ func runPair(cfg NodeConfig) error {
 		return err
 	}
 
-	token, err := waitForPair(client)
+	token, err := waitForPair(ctx, client)
 	if err != nil {
+		if ctx.Err() != nil {
+			return nil
+		}
 		return err
 	}
 	state.Token = token
@@ -373,9 +379,12 @@ func runNode(cfg NodeConfig) error {
 				client.Close()
 				return err
 			}
-			token, err := waitForPair(client)
+			token, err := waitForPair(ctx, client)
 			if err != nil {
 				client.Close()
+				if ctx.Err() != nil {
+					return nil
+				}
 				return err
 			}
 			state.Token = token
@@ -390,8 +399,11 @@ func runNode(cfg NodeConfig) error {
 			client.Close()
 			return err
 		}
-		if err := waitForHello(client); err != nil {
+		if err := waitForHello(ctx, client); err != nil {
 			client.Close()
+			if ctx.Err() != nil {
+				return nil
+			}
 			return err
 		}
 		if cfg.MDNSEnabled && !mdnsStarted {
@@ -633,10 +645,12 @@ func subscribeChat(c *BridgeClient, sessionKey string) error {
 	})
 }
 
-func waitForPair(c *BridgeClient) (string, error) {
+func waitForPair(ctx context.Context, c *BridgeClient) (string, error) {
 	deadline := time.After(6 * time.Minute)
 	for {
 		select {
+		case <-ctx.Done():
+			return "", ctx.Err()
 		case <-deadline:
 			return "", errors.New("pairing timeout")
 		case err := <-c.errs:
@@ -659,10 +673,12 @@ func waitForPair(c *BridgeClient) (string, error) {
 	}
 }
 
-func waitForHello(c *BridgeClient) error {
+func waitForHello(ctx context.Context, c *BridgeClient) error {
 	deadline := time.After(30 * time.Second)
 	for {
 		select {
+		case <-ctx.Done():
+			return ctx.Err()
 		case <-deadline:
 			return errors.New("hello timeout")
 		case err := <-c.errs:
