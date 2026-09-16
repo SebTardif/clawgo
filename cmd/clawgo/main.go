@@ -349,6 +349,12 @@ func runNode(cfg NodeConfig) error {
 	var mdnsCleanup func()
 	mdnsStarted := false
 	backoff := time.Second
+	var ttsQueue *TTSQueue
+	defer func() {
+		if ttsQueue != nil {
+			ttsQueue.Stop()
+		}
+	}()
 
 	for {
 		select {
@@ -430,16 +436,20 @@ func runNode(cfg NodeConfig) error {
 			if sessionKey == "" {
 				sessionKey = strings.TrimSpace(cfg.SessionKey)
 			}
-			ttsQueue, err := buildTTSEngine(cfg, client.logf)
+			engine, err := newNodeTTSEngine(cfg)
 			if err != nil {
 				client.logf("tts disabled: %v", err)
-			} else if ttsQueue != nil && sessionKey != "" {
+				ttsQueue = replaceTTSQueue(ttsQueue, nil, client.logf)
+			} else if engine != nil && sessionKey != "" {
+				ttsQueue = replaceTTSQueue(ttsQueue, engine, client.logf)
 				chatHandler = newChatSubscriber(sessionKey, ttsQueue, client.logf)
 				if err := subscribeChat(client, sessionKey); err != nil {
 					client.logf("chat.subscribe failed: %v", err)
 				} else {
 					client.logf("chat.subscribe sessionKey=%s", sessionKey)
 				}
+			} else {
+				ttsQueue = replaceTTSQueue(ttsQueue, nil, client.logf)
 			}
 		}
 		if chatHandler != nil {
@@ -506,6 +516,8 @@ func runNode(cfg NodeConfig) error {
 		}
 
 	reconnect:
+		ttsQueue.Stop()
+		ttsQueue = nil
 		if ctx.Err() != nil {
 			if mdnsCleanup != nil {
 				mdnsCleanup()
@@ -911,12 +923,15 @@ func pingLoop(ctx context.Context, c *BridgeClient, interval time.Duration) {
 }
 
 type TTSEngine interface {
-	Speak(string) error
+	Speak(context.Context, string) error
 }
 
 type TTSQueue struct {
 	engine TTSEngine
 	queue  chan string
+	ctx    context.Context
+	cancel context.CancelFunc
+	done   chan struct{}
 	logf   func(string, ...any)
 }
 
@@ -924,21 +939,51 @@ func newTTSQueue(engine TTSEngine, logf func(string, ...any)) *TTSQueue {
 	if engine == nil {
 		return nil
 	}
+	ctx, cancel := context.WithCancel(context.Background())
 	q := &TTSQueue{
 		engine: engine,
 		queue:  make(chan string, 16),
+		ctx:    ctx,
+		cancel: cancel,
+		done:   make(chan struct{}),
 		logf:   logf,
 	}
 	go q.loop()
 	return q
 }
 
+func replaceTTSQueue(prev *TTSQueue, engine TTSEngine, logf func(string, ...any)) *TTSQueue {
+	if prev != nil {
+		prev.Stop()
+	}
+	return newTTSQueue(engine, logf)
+}
+
 func (q *TTSQueue) loop() {
-	for text := range q.queue {
-		if err := q.engine.Speak(text); err != nil {
-			q.logf("tts error: %v", err)
+	defer close(q.done)
+	for {
+		select {
+		case <-q.ctx.Done():
+			return
+		case text := <-q.queue:
+			select {
+			case <-q.ctx.Done():
+				return
+			default:
+			}
+			if err := q.engine.Speak(q.ctx, text); err != nil {
+				q.logf("tts error: %v", err)
+			}
 		}
 	}
+}
+
+func (q *TTSQueue) Stop() {
+	if q == nil {
+		return
+	}
+	q.cancel()
+	<-q.done
 }
 
 func (q *TTSQueue) Speak(text string) {
@@ -947,6 +992,8 @@ func (q *TTSQueue) Speak(text string) {
 		return
 	}
 	select {
+	case <-q.ctx.Done():
+		return
 	case q.queue <- trimmed:
 	default:
 		q.logf("tts queue full; dropping text")
@@ -970,7 +1017,7 @@ func newSystemTTSEngine(cmd, voice string, rate int) (*systemTTSEngine, error) {
 	return &systemTTSEngine{command: resolved, voice: voice, rate: rate}, nil
 }
 
-func (s *systemTTSEngine) Speak(text string) error {
+func (s *systemTTSEngine) Speak(ctx context.Context, text string) error {
 	trimmed := strings.TrimSpace(text)
 	if trimmed == "" {
 		return nil
@@ -983,22 +1030,19 @@ func (s *systemTTSEngine) Speak(text string) error {
 		args = append(args, "-s", strconv.Itoa(s.rate))
 	}
 	args = append(args, trimmed)
-	cmd := exec.Command(s.command, args...)
+	cmd := exec.CommandContext(ctx, s.command, args...)
+	cmd.WaitDelay = 2 * time.Second
 	cmd.Stdout = io.Discard
 	cmd.Stderr = io.Discard
 	return cmd.Run()
 }
 
-func buildTTSEngine(cfg NodeConfig, logf func(string, ...any)) (*TTSQueue, error) {
+func newNodeTTSEngine(cfg NodeConfig) (TTSEngine, error) {
 	switch strings.ToLower(strings.TrimSpace(cfg.TTSEngine)) {
 	case "", "none":
 		return nil, nil
 	case "system":
-		engine, err := newSystemTTSEngine(cfg.TTSSystemCommand, cfg.TTSSystemVoice, cfg.TTSSystemRate)
-		if err != nil {
-			return nil, err
-		}
-		return newTTSQueue(engine, logf), nil
+		return newSystemTTSEngine(cfg.TTSSystemCommand, cfg.TTSSystemVoice, cfg.TTSSystemRate)
 	default:
 		return nil, fmt.Errorf("unsupported tts engine: %s", cfg.TTSEngine)
 	}
