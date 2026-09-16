@@ -48,7 +48,7 @@ func TestTTSQueueStopCancelsActiveSpeech(t *testing.T) {
 	q.Speak("first")
 	deadline := time.Now().Add(5 * time.Second)
 	for {
-		if _, err := os.Stat(started); err == nil {
+		if marker, err := os.ReadFile(started); err == nil && strings.TrimSpace(string(marker)) == "started" {
 			break
 		}
 		if time.Now().After(deadline) {

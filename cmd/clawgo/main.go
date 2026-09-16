@@ -1030,7 +1030,7 @@ func (s *systemTTSEngine) Speak(ctx context.Context, text string) error {
 	if s.rate > 0 {
 		args = append(args, "-s", strconv.Itoa(s.rate))
 	}
-	args = append(args, trimmed)
+	args = append(args, "--", trimmed)
 	cmd := exec.CommandContext(ctx, s.command, args...)
 	cmd.WaitDelay = 2 * time.Second
 	cmd.Stdout = io.Discard
