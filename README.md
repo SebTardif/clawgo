@@ -69,6 +69,8 @@ Each line on the FIFO becomes a `voice.transcript`; chat responses from the `mai
 
 A bridge disconnect or node shutdown cancels pending and active speech. Custom TTS wrappers should use `exec` to run their speech command so cancellation reaches it.
 
+With `-stt-engine brabble`, only final utterances are routed or sent to the bridge; interim hypotheses do not trigger requests or quick actions.
+
 SIGINT and SIGTERM interrupt reconnect backoff immediately, including when the bridge is unavailable.
 They also cancel bridge dialing and pairing/hello waits in `run` and `pair`, closing the connection before exit.
 
