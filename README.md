@@ -28,6 +28,7 @@ GOOS=linux GOARCH=arm64 go build -o /tmp/clawgo-linux-arm64 ./cmd/clawgo
 | `-chat-subscribe` | Enable chat stream+TTS (default `true`). |
 | `-tts-engine` | `system`, `piper`, `elevenlabs`, or `none` (system = `espeak-ng`). |
 | `-tts-system-voice` | espeak voice id (default `en-us`). |
+| `-tts-system-command` | espeak-compatible executable; receives voice/rate options, `--`, then the utterance. |
 | `-tts-system-rate` | Speech rate (wpm). |
 | `-mdns-service` | Bonjour service type (default `_clawdbot-node._tcp`). |
 | `-stdin` | Read transcripts from stdin (pipe/FIFO). |
@@ -73,6 +74,8 @@ With `-stt-engine brabble`, only final utterances are routed or sent to the brid
 
 SIGINT and SIGTERM interrupt reconnect backoff immediately, including when the bridge is unavailable.
 They also cancel bridge dialing and pairing/hello waits in `run` and `pair`, closing the connection before exit.
+
+Spoken text is passed after `--` so leading dashes are treated as words. Custom `-tts-system-command` wrappers must preserve the option separator when forwarding arguments to espeak-ng.
 
 ## systemd example
 

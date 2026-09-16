@@ -74,7 +74,6 @@ func buildArgRecorder(t *testing.T) (bin, out string) {
 	srcText := `package main
 
 import (
- "context"
 	"encoding/json"
 	"os"
 )
