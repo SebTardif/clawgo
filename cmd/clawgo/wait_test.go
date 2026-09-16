@@ -3,9 +3,62 @@ package main
 import (
 	"context"
 	"errors"
+	"net"
 	"testing"
 	"time"
 )
+
+func TestConnectBridgeCanceled(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	client, err := connectBridge(ctx, listener.Addr().String())
+	if client != nil {
+		client.Close()
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("connectBridge(canceled) = %v, want context.Canceled", err)
+	}
+}
+
+func TestConnectBridgeCancellationClosesConnection(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	client, err := connectBridge(ctx, listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	peer, err := listener.Accept()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer peer.Close()
+	cancel()
+	select {
+	case <-client.done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("cancellation did not close bridge")
+	}
+	if err := peer.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	var buf [1]byte
+	if _, err := peer.Read(buf[:]); err == nil {
+		t.Fatal("peer read succeeded after cancellation")
+	} else if timeout, ok := err.(net.Error); ok && timeout.Timeout() {
+		t.Fatal("peer connection remained open after cancellation")
+	}
+}
 
 func testBridgeClient() *BridgeClient {
 	return &BridgeClient{

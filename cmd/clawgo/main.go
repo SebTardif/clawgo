@@ -44,6 +44,7 @@ type BridgeClient struct {
 	frames       chan map[string]any
 	eventMu      sync.RWMutex
 	eventHandler func(string, string)
+	closeOnce    sync.Once
 }
 
 type NodeConfig struct {
@@ -257,14 +258,20 @@ func runPair(cfg NodeConfig) error {
 		state.DisplayName = cfg.DisplayName
 	}
 
-	client, err := connectBridge(cfg.BridgeAddr)
+	client, err := connectBridge(ctx, cfg.BridgeAddr)
 	if err != nil {
+		if ctx.Err() != nil {
+			return nil
+		}
 		return err
 	}
 	defer client.Close()
 
 	client.logf("connected to bridge %s", cfg.BridgeAddr)
 	if err := sendPairRequest(client, cfg, state); err != nil {
+		if ctx.Err() != nil {
+			return nil
+		}
 		return err
 	}
 
@@ -353,7 +360,7 @@ func runNode(cfg NodeConfig) error {
 		default:
 		}
 
-		client, err := connectBridge(cfg.BridgeAddr)
+		client, err := connectBridge(ctx, cfg.BridgeAddr)
 		if err != nil {
 			logf("bridge connect failed: %v", err)
 			if err := sleepContext(ctx, backoff); err != nil {
@@ -377,6 +384,9 @@ func runNode(cfg NodeConfig) error {
 			client.logf("no token found; requesting pairing")
 			if err := sendPairRequest(client, cfg, state); err != nil {
 				client.Close()
+				if ctx.Err() != nil {
+					return nil
+				}
 				return err
 			}
 			token, err := waitForPair(ctx, client)
@@ -397,6 +407,9 @@ func runNode(cfg NodeConfig) error {
 
 		if err := sendHello(client, cfg, state); err != nil {
 			client.Close()
+			if ctx.Err() != nil {
+				return nil
+			}
 			return err
 		}
 		if err := waitForHello(ctx, client); err != nil {
@@ -514,11 +527,12 @@ func runNode(cfg NodeConfig) error {
 	}
 }
 
-func connectBridge(addr string) (*BridgeClient, error) {
+func connectBridge(ctx context.Context, addr string) (*BridgeClient, error) {
 	if addr == "" {
 		return nil, errors.New("bridge address required")
 	}
-	conn, err := net.DialTimeout("tcp", addr, 5*time.Second)
+	dialer := net.Dialer{Timeout: 5 * time.Second}
+	conn, err := dialer.DialContext(ctx, "tcp", addr)
 	if err != nil {
 		return nil, err
 	}
@@ -530,16 +544,21 @@ func connectBridge(addr string) (*BridgeClient, error) {
 		frames: make(chan map[string]any, 16),
 	}
 	go client.readLoop()
+	go func() {
+		select {
+		case <-ctx.Done():
+			client.Close()
+		case <-client.done:
+		}
+	}()
 	return client, nil
 }
 
 func (c *BridgeClient) Close() {
-	select {
-	case <-c.done:
-	default:
+	c.closeOnce.Do(func() {
 		close(c.done)
-	}
-	_ = c.conn.Close()
+		_ = c.conn.Close()
+	})
 }
 
 func (c *BridgeClient) sendFrame(frame any) error {
