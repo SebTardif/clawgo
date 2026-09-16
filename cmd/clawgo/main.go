@@ -796,7 +796,8 @@ func forwardTranscripts(ctx context.Context, c *BridgeClient, cfg NodeConfig, in
 				return
 			}
 			text := strings.TrimSpace(tr.Text)
-			if text == "" {
+			// The bridge treats every transcript as a complete utterance.
+			if !tr.Final || text == "" {
 				continue
 			}
 			if router != nil {
