@@ -67,6 +67,8 @@ printf hey computer turn on the lights
 
 Each line on the FIFO becomes a `voice.transcript`; chat responses from the `main` session are spoken via `espeak-ng`.
 
+SIGINT and SIGTERM interrupt reconnect backoff immediately, including when the bridge is unavailable.
+
 ## systemd example
 
 Minimal steps:
