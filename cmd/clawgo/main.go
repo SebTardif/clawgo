@@ -516,6 +516,8 @@ func runNode(cfg NodeConfig) error {
 		}
 
 	reconnect:
+		ttsQueue.Stop()
+		ttsQueue = nil
 		if ctx.Err() != nil {
 			if mdnsCleanup != nil {
 				mdnsCleanup()
@@ -921,26 +923,28 @@ func pingLoop(ctx context.Context, c *BridgeClient, interval time.Duration) {
 }
 
 type TTSEngine interface {
-	Speak(string) error
+	Speak(context.Context, string) error
 }
 
 type TTSQueue struct {
-	engine   TTSEngine
-	queue    chan string
-	stop     chan struct{}
-	done     chan struct{}
-	logf     func(string, ...any)
-	stopOnce sync.Once
+	engine TTSEngine
+	queue  chan string
+	ctx    context.Context
+	cancel context.CancelFunc
+	done   chan struct{}
+	logf   func(string, ...any)
 }
 
 func newTTSQueue(engine TTSEngine, logf func(string, ...any)) *TTSQueue {
 	if engine == nil {
 		return nil
 	}
+	ctx, cancel := context.WithCancel(context.Background())
 	q := &TTSQueue{
 		engine: engine,
 		queue:  make(chan string, 16),
-		stop:   make(chan struct{}),
+		ctx:    ctx,
+		cancel: cancel,
 		done:   make(chan struct{}),
 		logf:   logf,
 	}
@@ -959,15 +963,15 @@ func (q *TTSQueue) loop() {
 	defer close(q.done)
 	for {
 		select {
-		case <-q.stop:
+		case <-q.ctx.Done():
 			return
 		case text := <-q.queue:
 			select {
-			case <-q.stop:
+			case <-q.ctx.Done():
 				return
 			default:
 			}
-			if err := q.engine.Speak(text); err != nil {
+			if err := q.engine.Speak(q.ctx, text); err != nil {
 				q.logf("tts error: %v", err)
 			}
 		}
@@ -978,9 +982,8 @@ func (q *TTSQueue) Stop() {
 	if q == nil {
 		return
 	}
-	q.stopOnce.Do(func() {
-		close(q.stop)
-	})
+	q.cancel()
+	<-q.done
 }
 
 func (q *TTSQueue) Speak(text string) {
@@ -989,7 +992,7 @@ func (q *TTSQueue) Speak(text string) {
 		return
 	}
 	select {
-	case <-q.stop:
+	case <-q.ctx.Done():
 		return
 	case q.queue <- trimmed:
 	default:
@@ -1014,7 +1017,7 @@ func newSystemTTSEngine(cmd, voice string, rate int) (*systemTTSEngine, error) {
 	return &systemTTSEngine{command: resolved, voice: voice, rate: rate}, nil
 }
 
-func (s *systemTTSEngine) Speak(text string) error {
+func (s *systemTTSEngine) Speak(ctx context.Context, text string) error {
 	trimmed := strings.TrimSpace(text)
 	if trimmed == "" {
 		return nil
@@ -1027,7 +1030,8 @@ func (s *systemTTSEngine) Speak(text string) error {
 		args = append(args, "-s", strconv.Itoa(s.rate))
 	}
 	args = append(args, trimmed)
-	cmd := exec.Command(s.command, args...)
+	cmd := exec.CommandContext(ctx, s.command, args...)
+	cmd.WaitDelay = 2 * time.Second
 	cmd.Stdout = io.Discard
 	cmd.Stderr = io.Discard
 	return cmd.Run()

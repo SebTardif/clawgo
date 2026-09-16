@@ -67,6 +67,8 @@ printf hey computer turn on the lights
 
 Each line on the FIFO becomes a `voice.transcript`; chat responses from the `main` session are spoken via `espeak-ng`.
 
+A bridge disconnect or node shutdown cancels pending and active speech. Custom TTS wrappers should use `exec` to run their speech command so cancellation reaches it.
+
 SIGINT and SIGTERM interrupt reconnect backoff immediately, including when the bridge is unavailable.
 They also cancel bridge dialing and pairing/hello waits in `run` and `pair`, closing the connection before exit.
 
