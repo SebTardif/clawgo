@@ -48,6 +48,49 @@ func TestReadLoopDoesNotHangWhenErrorConsumerLeaves(t *testing.T) {
 	}
 }
 
+func TestReadLoopTerminatesWhenProductionErrorBufferIsFull(t *testing.T) {
+	c, serverConn := testReadLoopClient(t)
+
+	firstDone := make(chan struct{})
+	go func() {
+		c.readLoop()
+		close(firstDone)
+	}()
+	_ = serverConn.Close()
+	select {
+	case <-firstDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("first production readLoop did not return after server close")
+	}
+	select {
+	case c.errs <- errors.New("probe"):
+		t.Fatal("errs slot was empty; production sendErr did not fill it")
+	default:
+	}
+
+	clientConn2, serverConn2 := net.Pipe()
+	t.Cleanup(func() {
+		_ = clientConn2.Close()
+		_ = serverConn2.Close()
+	})
+	c.conn = clientConn2
+
+	secondDone := make(chan struct{})
+	started := time.Now()
+	go func() {
+		c.readLoop()
+		close(secondDone)
+	}()
+	_ = serverConn2.Close()
+	c.Close()
+	select {
+	case <-secondDone:
+		t.Logf("second production readLoop returned after Close with full errs in %s", time.Since(started))
+	case <-time.After(2 * time.Second):
+		t.Fatal("second production readLoop blocked on full errs after Close")
+	}
+}
+
 func TestReadLoopPublishesErrorWhenConsumerIsPresent(t *testing.T) {
 	c, serverConn := testReadLoopClient(t)
 
