@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Add an opt-in `-tts-system-timeout` to recover the speech queue from a hung system TTS child while preserving unlimited playback by default. Thanks @SebTardif! (#10)
 - Stop speech queues and cancel active system TTS when the bridge disconnects or the node exits. Thanks @SebTardif! (#7)
 - Forward only final speech transcripts to quick actions, voice events, and agent requests. Thanks @SebTardif! (#12)
 - Treat leading dashes in spoken text as words instead of espeak options. Thanks @SebTardif! (#11)
