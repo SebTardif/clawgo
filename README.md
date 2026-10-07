@@ -75,6 +75,8 @@ With `-stt-engine brabble`, only final utterances are routed or sent to the brid
 SIGINT and SIGTERM interrupt reconnect backoff immediately, including when the bridge is unavailable.
 They also cancel bridge dialing and pairing/hello waits in `run` and `pair`, closing the connection before exit.
 
+Bridge replies already received are processed before a disconnect is reported, including pairing and hello replies sent immediately before the bridge closes the connection.
+
 Spoken text is passed after `--` so leading dashes are treated as words. Custom `-tts-system-command` wrappers must preserve the option separator when forwarding arguments to espeak-ng.
 
 ## systemd example

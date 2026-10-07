@@ -40,8 +40,8 @@ type BridgeClient struct {
 	mu           sync.Mutex
 	logf         func(string, ...any)
 	done         chan struct{}
-	errs         chan error
 	frames       chan map[string]any
+	readErr      error // Read only after frames closes.
 	eventMu      sync.RWMutex
 	eventHandler func(string, string)
 	closeOnce    sync.Once
@@ -495,14 +495,13 @@ func runNode(cfg NodeConfig) error {
 					mdnsCleanup()
 				}
 				return nil
-			case err := <-client.errs:
-				if err != nil {
-					client.logf("bridge error: %v", err)
+			case frame, ok := <-client.frames:
+				if !ok {
+					client.logf("bridge error: %v", client.readErr)
+					connCancel()
+					client.Close()
+					goto reconnect
 				}
-				connCancel()
-				client.Close()
-				goto reconnect
-			case frame := <-client.frames:
 				if frame == nil {
 					continue
 				}
@@ -552,7 +551,6 @@ func connectBridge(ctx context.Context, addr string) (*BridgeClient, error) {
 		conn:   conn,
 		logf:   func(format string, args ...any) { fmt.Fprintf(os.Stderr, format+"\n", args...) },
 		done:   make(chan struct{}),
-		errs:   make(chan error, 1),
 		frames: make(chan map[string]any, 16),
 	}
 	go client.readLoop()
@@ -600,6 +598,8 @@ func (c *BridgeClient) dispatchEvent(evt, payload string) {
 }
 
 func (c *BridgeClient) readLoop() {
+	defer close(c.frames)
+	c.readErr = io.EOF
 	scanner := bufio.NewScanner(c.conn)
 	scanner.Buffer(make([]byte, 0, 64*1024), 8*1024*1024)
 	for scanner.Scan() {
@@ -618,11 +618,9 @@ func (c *BridgeClient) readLoop() {
 			return
 		}
 	}
-	if err := scanner.Err(); err != nil && !errors.Is(err, io.EOF) {
-		c.errs <- err
-		return
+	if err := scanner.Err(); err != nil {
+		c.readErr = err
 	}
-	c.errs <- io.EOF
 }
 
 func sendPairRequest(c *BridgeClient, cfg NodeConfig, state *NodeState) error {
@@ -684,9 +682,10 @@ func waitForPair(ctx context.Context, c *BridgeClient) (string, error) {
 			return "", ctx.Err()
 		case <-deadline:
 			return "", errors.New("pairing timeout")
-		case err := <-c.errs:
-			return "", err
-		case frame := <-c.frames:
+		case frame, ok := <-c.frames:
+			if !ok {
+				return "", c.readErr
+			}
 			if frame == nil {
 				continue
 			}
@@ -712,9 +711,10 @@ func waitForHello(ctx context.Context, c *BridgeClient) error {
 			return ctx.Err()
 		case <-deadline:
 			return errors.New("hello timeout")
-		case err := <-c.errs:
-			return err
-		case frame := <-c.frames:
+		case frame, ok := <-c.frames:
+			if !ok {
+				return c.readErr
+			}
 			if frame == nil {
 				continue
 			}
